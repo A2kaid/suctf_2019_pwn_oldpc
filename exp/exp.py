@@ -39,7 +39,7 @@ context.arch = 'amd64'
 execve_file = './pwn'
 # sh = process(execve_file, env={'LD_PRELOAD': '/tmp/gdb_symbols{}.so'.replace('{}', salt)})
 # sh = process(execve_file)
-sh = remote('xxxxx', 10001)
+sh = remote('xxxxxxxxx', 10001)
 elf = ELF(execve_file)
 libc = ELF('./libc-2.23.so')
 # libc = ELF('/glibc/glibc-2.23/debug_x86/lib/libc.so.6')
